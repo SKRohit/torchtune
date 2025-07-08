@@ -111,5 +111,7 @@ class LinearCrossEntropyLoss(nn.Module, SFTLinearLoss):
                 hidden_chunks[idx],
                 target_chunks[idx],
             )
+        if total_elements == 0:
+            return total_loss
 
         return total_loss / total_elements

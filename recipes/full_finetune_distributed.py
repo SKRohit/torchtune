@@ -575,6 +575,11 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
             self._logger,
             "Distributed training is enabled. Instantiating model and loading checkpoint on Rank 0 ...",
         )
+        if self.cp_degree > 1:
+            utils.log_rank_zero(
+                self._logger,
+                f"CP is enabled with degree {self.cp_degree} and rotate method {self.context_parallel_rotate_method}.",
+            )
         init_start = time.perf_counter()
 
         with training.set_default_dtype(self._dtype), torch.device("meta"):
@@ -644,9 +649,9 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
             ]
 
             if self.parallel_dims.dp_replicate_enabled:
-                dp_mesh_dim_names = ("dp_replicate", "dp_shard")
+                dp_mesh_dim_names = ("dp_replicate", "dp_shard_cp")
             else:
-                dp_mesh_dim_names = ("dp_shard",)
+                dp_mesh_dim_names = ("dp_shard_cp",)
 
             training.shard_model(
                 model=model,

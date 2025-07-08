@@ -625,3 +625,74 @@ class TestFullFinetuneDistributedRecipe:
         torch.testing.assert_close(
             resumed_loss_values[:2], expected_loss_values[2:], rtol=1e-4, atol=1e-4
         )
+
+
+@pytest.mark.integration_test
+@pytest.mark.parametrize(
+    "config, model_type, ckpt_type, context_parallel_dim, context_parallel_rotate_method",
+    [
+        ("llama2/7B_full", "llama2", "hf", 2, "alltoall"),
+        ("llama2/7B_full", "llama2", "hf", 2, "allgather"),
+        ("llama3/8B_full", "llama3", "tune", 2, "alltoall"),
+        ("llama3/8B_full", "llama3", "tune", 2, "allgather"),
+    ],
+)
+@gpu_test(gpu_count=4)
+def test_loss_with_context_parallel_2d(
+    self,
+    config,
+    model_type,
+    ckpt_type,
+    context_parallel_dim,
+    context_parallel_rotate_method,
+    tmpdir,
+    monkeypatch,
+):
+    """Test context parallel functionality with different rotate methods."""
+    ckpt_component = CKPT_COMPONENT_MAP[ckpt_type]
+    ckpt = model_type + "_" + ckpt_type
+    ckpt_path = Path(CKPT_MODEL_PATHS[ckpt])
+    tokenizer_path = Path(TOKENIZER_PATHS[model_type])
+    ckpt_dir = ckpt_path.parent
+    log_file = gen_log_file_name(tmpdir)
+
+    # Config file needed for model conversion.
+    write_hf_ckpt_config(ckpt_dir)
+
+    cmd = f"""
+    tune run --nnodes 1 --nproc_per_node 2 full_finetune_distributed \
+        --config {config} \
+        batch_size=1 \
+        gradient_accumulation_steps=4 \
+        output_dir={tmpdir} \
+        checkpointer._component_={ckpt_component} \
+        checkpointer.checkpoint_dir='{ckpt_dir}' \
+        checkpointer.checkpoint_files=[{ckpt_path}]\
+        checkpointer.output_dir={tmpdir} \
+        checkpointer.model_type={model_type.upper()} \
+        tokenizer.path='{tokenizer_path}' \
+        tokenizer.prompt_template=null \
+        context_parallel_dim={context_parallel_dim} \
+        context_parallel_rotate_method={context_parallel_rotate_method} \
+        metric_logger.filename={log_file} \
+    """.split()
+
+    model_config = MODEL_TEST_CONFIGS[model_type]
+    cmd = cmd + self._get_test_config_overrides() + model_config
+    # Add packed=False to ensure CP compatibility
+    cmd.append("dataset.packed=False")
+
+    monkeypatch.setattr(sys, "argv", cmd)
+    runpy.run_path(TUNE_PATH, run_name="__main__")
+    loss_values = get_loss_values_from_metric_logger(log_file)
+
+    # For cp_dim = 2, we have dp_dim = 2, so 2x global batch size.
+    # For cp_dim = 4 there is no data parallelism (since there are 4 workers).
+    # This means we expect the multi-rank loss for cp_dim=2 but single-rank loss for cp_dim=4.
+    expected_loss_values = (
+        self._fetch_expected_loss_values_multi_rank(model_type)
+        if context_parallel_dim == 2
+        else self._fetch_expected_loss_values_single_rank(model_type)
+    )
+
+    torch.testing.assert_close(loss_values, expected_loss_values, rtol=1e-4, atol=1e-4)
