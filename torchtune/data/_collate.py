@@ -234,7 +234,7 @@ def padded_collate_sft(
         original_lengths = [(i, len(x["tokens"])) for i, x in enumerate(batch)]
         index, batch_max_len = sorted(original_lengths, key=lambda x: x[1])[-1]
         if batch_max_len % (2 * cp_degree) != 0:
-            supported_cp_len = math.ceil(batch_max_len / cp_degree * 2) * (
+            supported_cp_len = math.ceil(batch_max_len / (cp_degree * 2)) * (
                 2 * cp_degree
             )
             cp_pad_len = supported_cp_len - batch_max_len
